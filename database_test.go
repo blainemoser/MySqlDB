@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -138,16 +139,6 @@ func TestConfigSupplementing(t *testing.T) {
 	checkHasSchema(t, tdb, newDB)
 }
 
-func TestRows(t *testing.T) {
-	defer recovery(t)
-	createWidgetsTable(t)
-	rows, err := tdb.Rows("select * from widgets where sku like ?", []interface{}{"%WIDG%"})
-	if err != nil {
-		t.Error(err)
-	}
-	checkRows(t, rows)
-}
-
 func TestQueryRaw(t *testing.T) {
 	defer recovery(t)
 	createWidgetsTable(t)
@@ -176,22 +167,12 @@ func TestQueryRaw(t *testing.T) {
 func TestRow(t *testing.T) {
 	defer recovery(t)
 	createWidgetsTable(t)
-	row := tdb.Row("select sku, description from widgets where id = ?", 2)
-	err := row.Err()
+	row, err := tdb.Row("select sku, description from widgets where id = ?", 2)
 	if err != nil {
 		t.Error(err)
 	}
-	rowMapping := make([]interface{}, 0)
-	var newCol sql.NullString
-	var newCol2 sql.NullString
-	rowMapping = append(rowMapping, &newCol)
-	rowMapping = append(rowMapping, &newCol2)
-	row.Scan(rowMapping...)
-	resultRow := make(map[string]interface{})
-	resultRow["sku"] = getRowValue(rowMapping[0])
-	resultRow["description"] = getRowValue(rowMapping[1])
 	var errs []string
-	for col, mapped := range resultRow {
+	for col, mapped := range row {
 		mappedStr, ok := mapped.(string)
 		if !ok {
 			errs = append(errs, fmt.Sprintf("expected %s to be a string", col))
@@ -216,25 +197,12 @@ func TestRow(t *testing.T) {
 func TestRowByStringField(t *testing.T) {
 	defer recovery(t)
 	createWidgetsTable(t)
-	row := tdb.RowByStringField("select sku, description, weight from widgets where description = ?", "Widget Three")
-	err := row.Err()
+	row, err := tdb.RowByStringField("select sku, description, weight from widgets where description = ?", "Widget Three")
 	if err != nil {
 		t.Error(err)
 	}
-	rowMapping := make([]interface{}, 0)
-	var newCol sql.NullString
-	var newCol2 sql.NullString
-	var newCol3 sql.NullFloat64
-	rowMapping = append(rowMapping, &newCol)
-	rowMapping = append(rowMapping, &newCol2)
-	rowMapping = append(rowMapping, &newCol3)
-	row.Scan(rowMapping...)
-	resultRow := make(map[string]interface{})
-	resultRow["sku"] = getRowValue(rowMapping[0])
-	resultRow["description"] = getRowValue(rowMapping[1])
-	resultRow["weight"] = getRowValue(rowMapping[2])
 	var errs []string
-	for col, mapped := range resultRow {
+	for col, mapped := range row {
 		if mappedStr, ok := mapped.(string); ok {
 			if col == "description" {
 				if mappedStr != "Widget Three" {
@@ -258,6 +226,33 @@ func TestRowByStringField(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+func TestCreateRecord(t *testing.T) {
+	defer recovery(t)
+	createWidgetsTable(t)
+	_, err := tdb.MakeRecord(map[string]interface{}{
+		"sku":         "WIDG4",
+		"description": "Widget Four",
+		"weight":      100.9,
+	}, "widgets").Create()
+	if err != nil {
+		t.Error(err)
+	}
+	checkWidgetExists(t, "WIDG4")
+}
+
+func TestUpdateRecord(t *testing.T) {
+	defer recovery(t)
+	createWidgetsTable(t)
+	_, err := tdb.MakeRecord(map[string]interface{}{
+		"weight": 110.9,
+		"sku":    "WIDG4",
+	}, "widgets").Update("sku")
+	if err != nil {
+		t.Error(err)
+	}
+	checkWidgetUpdated(t, "WIDG4")
 }
 
 func bootstrap() error {
@@ -469,4 +464,28 @@ func setEnvVars() {
 	os.Setenv("DB_USERNAME", "root")
 	os.Setenv("DB_PASSWORD", ts.Password())
 	os.Setenv("DB_CONNECTION", "mysql")
+}
+
+func checkWidgetExists(t *testing.T, widg string) {
+	_, err := tdb.RowByStringField("select * from widgets where sku = ?", widg)
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func checkWidgetUpdated(t *testing.T, widg string) {
+	widget, err := tdb.RowByStringField("select * from widgets where sku = ?", widg)
+	if err != nil {
+		t.Error(err)
+	}
+	if widget["weight"] == nil {
+		t.Errorf("weight not found")
+	}
+	weight, ok := widget["weight"].(float64)
+	if !ok {
+		t.Errorf("expected weight to be a float 64")
+	}
+	if math.Abs(weight-110.9) > 0.1 {
+		t.Errorf("expected weight to be %f, got %f", 110.9, weight)
+	}
 }

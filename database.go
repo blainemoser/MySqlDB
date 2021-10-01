@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -16,6 +17,12 @@ type Database struct {
 	connection *sql.DB
 	configs    *Configs
 	Schemaless bool
+}
+
+type Record struct {
+	properties map[string]interface{}
+	database   *Database
+	table      string
 }
 
 type Configs struct {
@@ -35,7 +42,7 @@ func Make(configs *Configs) (Database, error) {
 		Schemaless: false,
 	}
 
-	database.setConfigs(false)
+	database.setConfigs()
 	database.connect()
 	return database, nil
 }
@@ -49,7 +56,7 @@ func MakeSchemaless(configs *Configs) (Database, error) {
 		Schemaless: true,
 	}
 
-	database.setConfigs(true)
+	database.setConfigs()
 	database.connect()
 	return database, nil
 }
@@ -72,18 +79,18 @@ func (database *Database) Name() string {
 	return database.configs.Database
 }
 
-func (d *Database) setConfigs(schemaless bool) {
+func (d *Database) setConfigs() {
 	// Check whether the configs need to be supplemented with Environment Vars
-	if d.hasAllConfigs(schemaless) {
+	if d.hasAllConfigs() {
 		return
 	}
 
-	d.supplementConfigs(schemaless)
+	d.supplementConfigs()
 }
 
-func (d *Database) hasAllConfigs(schemaless bool) bool {
+func (d *Database) hasAllConfigs() bool {
 	var hasDB bool
-	if schemaless {
+	if d.Schemaless {
 		hasDB = true
 	} else {
 		hasDB = len(d.configs.Database) > 0
@@ -185,18 +192,13 @@ func rowResultWalk(rowResult *sql.Rows, cols []string, typeMapping map[string]st
 	return result, nil
 }
 
-// Rows gets rows from the query
-func (d *Database) Rows(query string, escaped []interface{}) (*sql.Rows, error) {
-	return d.getRowResult(query, escaped)
-}
-
 func (d *Database) getRowResult(query string, escaped []interface{}) (*sql.Rows, error) {
 	rows, err := d.getRows(query, escaped)
 	if err != nil {
 		return nil, err
 	}
 	if !reflect.ValueOf(rows).CanInterface() {
-		return nil, errors.New("Rows not found")
+		return nil, errors.New("rows not found")
 	}
 	rowResult, ok := (reflect.ValueOf(rows).Interface()).(*sql.Rows)
 	if !ok {
@@ -206,15 +208,31 @@ func (d *Database) getRowResult(query string, escaped []interface{}) (*sql.Rows,
 }
 
 // Row gets a row from the query
-func (d *Database) Row(query string, id int64) *sql.Row {
-	row := d.connection.QueryRow(query, id)
-	return row
+func (d *Database) Row(query string, id int64) (map[string]interface{}, error) {
+	rows, err := d.QueryRaw(query, []interface{}{
+		id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < 1 {
+		return nil, errors.New("no result")
+	}
+	return rows[0], nil
 }
 
 // Row gets a row from the query
-func (d *Database) RowByStringField(query string, field string) *sql.Row {
-	row := d.connection.QueryRow(query, field)
-	return row
+func (d *Database) RowByStringField(query string, field string) (map[string]interface{}, error) {
+	rows, err := d.QueryRaw(query, []interface{}{
+		field,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < 1 {
+		return nil, errors.New("no result")
+	}
+	return rows[0], nil
 }
 
 func (d *Database) getRows(query string, escaped []interface{}) (interface{}, error) {
@@ -384,10 +402,10 @@ func makeRow(typeMapping map[string]string, cols []string) []interface{} {
 	return row
 }
 
-func (d *Database) supplementConfigs(schemaless bool) {
+func (d *Database) supplementConfigs() {
 	envVars := envConfigs()
 	for key, value := range envVars {
-		if key == "database" && schemaless {
+		if key == "database" && d.Schemaless {
 			continue
 		}
 		d.setDBConfig(key, value)
@@ -443,4 +461,76 @@ func getEnvVars(input map[string]string) map[string]string {
 	}
 
 	return result
+}
+
+// MakeRecord makes a record
+func (d *Database) MakeRecord(properties map[string]interface{}, table string) *Record {
+	record := &Record{
+		properties: properties,
+		database:   d,
+		table:      table,
+	}
+
+	return record
+}
+
+// Create creates a new record
+func (r *Record) Create() (int64, error) {
+
+	insertStatement := "INSERT INTO `" + r.database.Name() + "`.`" + r.table + "` (`@fields`) VALUES (@values)"
+
+	var inserts []interface{}
+	var fields []string
+	var valuesEscapes []string
+
+	for field, value := range r.properties {
+		fields = append(fields, field)
+		valuesEscapes = append(valuesEscapes, "?")
+		inserts = append(inserts, value)
+	}
+
+	insertStatement = strings.Replace(insertStatement, "@fields", strings.Join(fields, "`, `"), 1)
+	insertStatement = strings.Replace(insertStatement, "@values", strings.Join(valuesEscapes, ", "), 1)
+	insert, err := r.database.Exec(insertStatement, inserts)
+
+	// handle any error with the insert
+	if err != nil {
+		return 0, err
+	}
+	return insert.LastInsertId()
+}
+
+// Update updates an existing record
+func (r *Record) Update(id string) (int64, error) {
+
+	updateStatement := "UPDATE `" + r.database.Name() + "`.`" + r.table + "` SET "
+
+	var inserts []interface{}
+	where := " WHERE "
+
+	// empty string for ID property uses the default "id"
+	if len(id) < 1 {
+		id = "id"
+	}
+
+	for field, value := range r.properties {
+		if field == id {
+			where += id + " = ?;"
+		} else {
+			updateStatement += field + " = ?, "
+			inserts = append(inserts, value)
+		}
+	}
+
+	inserts = append(inserts, r.properties[id])
+
+	updateStatement = strings.TrimRight(updateStatement, ", ") + where
+
+	insert, err := r.database.Exec(updateStatement, inserts)
+
+	// handle any error with the insert
+	if err != nil {
+		return 0, err
+	}
+	return insert.LastInsertId()
 }
