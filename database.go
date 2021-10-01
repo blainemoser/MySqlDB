@@ -534,3 +534,25 @@ func (r *Record) Update(id string) (int64, error) {
 	}
 	return insert.LastInsertId()
 }
+
+func (d *Database) CheckHasTable(table string) (bool, error) {
+	tables, err := d.QueryRaw("SHOW TABLES", nil)
+	if err != nil {
+		return false, err
+	}
+	if len(tables) < 1 {
+		return false, fmt.Errorf("no tables found")
+	}
+	key := fmt.Sprintf("Tables_in_%s", d.Name())
+	exists := false
+	for _, v := range tables {
+		if v[key] == nil {
+			continue
+		}
+		if v[key] == table {
+			exists = true
+			break
+		}
+	}
+	return exists, nil
+}

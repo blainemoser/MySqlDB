@@ -114,9 +114,12 @@ func TestExec(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	err = checkHasTable("users")
+	hasTable, err := tdb.CheckHasTable("users")
 	if err != nil {
 		t.Error(err)
+	}
+	if !hasTable {
+		t.Errorf("table 'users' does not exist")
 	}
 }
 
@@ -353,46 +356,20 @@ func checkSchemaExists(t *testing.T, schemas []map[string]interface{}, db string
 	}
 }
 
-func checkHasTable(table string) error {
-	tables, err := tdb.QueryRaw("SHOW TABLES", nil)
-	if err != nil {
-		return err
-	}
-	if len(tables) < 1 {
-		return fmt.Errorf("no tables found")
-	}
-	key := fmt.Sprintf("Tables_in_%s", tdb.Name())
-	exists := false
-	for _, v := range tables {
-		if v[key] == nil {
-			continue
-		}
-		if v[key] == table {
-			exists = true
-			break
-		}
-	}
-	if !exists {
-		return fmt.Errorf("could not find table '%s'", table)
-	}
-	return nil
-}
-
 func createWidgetsTable(t *testing.T) {
-	err := checkHasTable("widgets")
+	hasTable, err := tdb.CheckHasTable("widgets")
 	if err != nil {
-		if err.Error() == fmt.Sprintf("could not find table '%s'", "widgets") {
-			_, err = tdb.Exec(widgetTable, nil)
-			if err != nil {
-				t.Error(err)
-			}
-			err = seedWidgetsTable()
-			if err != nil {
-				t.Error(err)
-			}
-			return
-		}
 		t.Error(err)
+	}
+	if !hasTable {
+		_, err = tdb.Exec(widgetTable, nil)
+		if err != nil {
+			t.Error(err)
+		}
+		err = seedWidgetsTable()
+		if err != nil {
+			t.Error(err)
+		}
 	}
 }
 
