@@ -541,7 +541,7 @@ func (d *Database) CheckHasTable(table string) (bool, error) {
 		return false, err
 	}
 	if len(tables) < 1 {
-		return false, fmt.Errorf("no tables found")
+		return false, nil
 	}
 	key := fmt.Sprintf("Tables_in_%s", d.Name())
 	exists := false
