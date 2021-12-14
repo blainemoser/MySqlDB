@@ -119,6 +119,14 @@ func (d *Database) connect() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	d.setUTC()
+}
+
+func (d *Database) setUTC() {
+	_, err := d.Exec("SET @@session.time_zone='+00:00';", []interface{}{})
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 // SetSchema sets a DB instance to having a schema
